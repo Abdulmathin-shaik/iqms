@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .container {
+            text-align: center;
+        }
+        
+        .input-group {
+            margin: 20px 0;
+        }
+        
+        .button-group {
+            margin: 20px 0;
+        }
+        
+        button {
+            padding: 10px 20px;
+            margin: 0 10px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        input[type="text"] {
+            padding: 10px;
+            width: 200px;
+            margin-right: 10px;
+        }
+        
+        #camera-container {
+            margin: 20px 0;
+            display: none;
+        }
+        
+        #video {
+            width: 100%;
+            max-width: 640px;
+            margin-bottom: 10px;
+        }
+        
+        #result-container {
+            margin: 20px 0;
+        }
+        
+        #result-image {
+            max-width: 100%;
+            margin-top: 20px;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        #history-container {
+            margin-top: 40px;
+            text-align: left;
+        }
+        
+        .history-item {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        
+        .history-item img {
+            max-width: 200px;
+            margin-top: 10px;
+        }
+        
+        .history-item .metadata {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+        
+        .tab-container {
+            margin: 20px 0;
+        }
+        
+        .tab-button {
+            background-color: #f1f1f1;
+            color: black;
+            padding: 10px 20px;
+            margin: 0 5px;
+            border: none;
+            border-radius: 4px 4px 0 0;
+        }
+        
+        .tab-button.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ML App</h1>
+        
+        <div class="tab-container">
+            <button class="tab-button active" onclick="showTab('capture')">Capture</button>
+            <button class="tab-button" onclick="showTab('history')">History</button>
+        </div>
+        
+        <div id="capture-tab">
+            <div class="input-group">
+                <input type="text" id="chamber-number" placeholder="Enter chamber number">
+            </div>
+            
+            <div class="button-group">
+                <input type="file" id="file-input" accept="image/*" style="display: none;">
+                <button onclick="document.getElementById('file-input').click()">Upload Picture</button>
+                <button onclick="startCamera()">Take Picture</button>
+            </div>
+            
+            <div id="camera-container">
+                <video id="video" autoplay></video>
+                <button id="capture-button" onclick="captureImage()">Click Picture</button>
+            </div>
+            
+            <div id="result-container" class="hidden">
+                <h2>Results</h2>
+                <div id="detections"></div>
+                <img id="result-image" alt="Result">
+            </div>
+        </div>
+        
+        <div id="history-tab" class="hidden">
+            <div class="input-group">
+                <input type="text" id="filter-chamber" placeholder="Filter by chamber number">
+                <button onclick="loadHistory()">Filter</button>
+            </div>
+            <div id="history-container"></div>
+        </div>
+    </div>
+
+    <script>
+        let stream = null;
+        
+        // Show/hide tabs
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector(`button[onclick="showTab('${tabName}')"]`).classList.add('active');
+            
+            if (tabName === 'capture') {
+                document.getElementById('capture-tab').classList.remove('hidden');
+                document.getElementById('history-tab').classList.add('hidden');
+            } else {
+                document.getElementById('capture-tab').classList.add('hidden');
+                document.getElementById('history-tab').classList.remove('hidden');
+                loadHistory();
+            }
+        }
+        
+        // Load detection history
+        async function loadHistory() {
+            const chamberFilter = document.getElementById('filter-chamber').value;
+            try {
+                const response = await fetch(`/detections${chamberFilter ? `?chamber_number=${chamberFilter}` : ''}`);
+                const detections = await response.json();
+                
+                const historyContainer = document.getElementById('history-container');
+                historyContainer.innerHTML = detections.map(detection => `
+                    <div class="history-item">
+                        <div class="metadata">
+                            <strong>Chamber:</strong> ${detection.chamber_number}<br>
+                            <strong>Time:</strong> ${new Date(detection.timestamp).toLocaleString()}<br>
+                            <strong>Detections:</strong> ${detection.detections.map(d => 
+                                `${d.class} (${(d.confidence * 100).toFixed(1)}%)`
+                            ).join(', ')}
+                        </div>
+                        <img src="${detection.result_image_path}" alt="Detection result">
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading history:', error);
+                alert('Error loading detection history');
+            }
+        }
+        
+        // Handle file upload
+        document.getElementById('file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const chamberNumber = document.getElementById('chamber-number').value;
+            if (!chamberNumber) {
+                alert('Please enter a chamber number');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('chamber_number', chamberNumber);
+            
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                displayResults(result);
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error processing image');
+            }
+        });
+        
+        // Start camera
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+                document.getElementById('camera-container').style.display = 'block';
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error accessing camera');
+            }
+        }
+        
+        // Capture image
+        async function captureImage() {
+            const chamberNumber = document.getElementById('chamber-number').value;
+            if (!chamberNumber) {
+                alert('Please enter a chamber number');
+                return;
+            }
+            
+            const video = document.getElementById('video');
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            
+            const imageData = canvas.toDataURL('image/jpeg');
+            
+            // Stop camera
+            if (stream) {
